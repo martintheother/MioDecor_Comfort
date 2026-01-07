@@ -8,6 +8,29 @@
     "windowcoverings_set",
     "windowcoverings_state"
   ],
+  "settings": [
+    {
+      "id": "calibration",
+      "type": "button",
+      "label": {
+        "en": "Start calibration"
+      },
+      "hint": {
+        "en": "Run a calibration cycle for the horizontal curtains."
+      }
+    },
+    {
+      "id": "reverse_direction",
+      "type": "checkbox",
+      "label": {
+        "en": "Reverse direction"
+      },
+      "hint": {
+        "en": "Swap the open and close direction for horizontal movement."
+      },
+      "value": false
+    }
+  ],
   "platforms": [
     "local"
   ],

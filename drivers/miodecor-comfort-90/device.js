@@ -7,12 +7,18 @@ require('./tuyaCluster');
 const DP_CONTROL = 0x01;
 const DP_POSITION = 0x02;
 const DP_POSITION_REPORT = 0x03;
+const DP_CALIBRATION = 0x04;
+const DP_DIRECTION = 0x05;
 const DP_TYPE_VALUE = 0x02;
 const DP_TYPE_ENUM = 0x04;
 
 const COMMAND_OPEN = 0x00;
 const COMMAND_STOP = 0x01;
 const COMMAND_CLOSE = 0x02;
+const COMMAND_CALIBRATE = 0x00;
+
+const DIRECTION_FORWARD = 0x00;
+const DIRECTION_REVERSE = 0x01;
 
 const STATE_UP = 'up';
 const STATE_DOWN = 'down';
@@ -68,8 +74,16 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
   _handleControlCommand(payload) {
     const command = payload[0];
     if (command === COMMAND_OPEN) {
+      if (this._isDirectionReversed()) {
+        this._setState(STATE_DOWN);
+        return;
+      }
       this._setState(STATE_UP);
     } else if (command === COMMAND_CLOSE) {
+      if (this._isDirectionReversed()) {
+        this._setState(STATE_UP);
+        return;
+      }
       this._setState(STATE_DOWN);
     } else if (command === COMMAND_STOP) {
       this._setState(STATE_IDLE);
@@ -107,7 +121,7 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
   }
 
   async _updatePosition(position) {
-    const normalized = Math.max(0, Math.min(100, position));
+    const normalized = this._normalizePositionFromDevice(position);
     const setValue = normalized / 100;
 
     this._lastPosition = normalized;
@@ -133,14 +147,17 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
       }
     }
 
-    await this._sendTuyaCommand(DP_POSITION, DP_TYPE_VALUE, this._encodeValue(position));
+    const devicePosition = this._normalizePositionForDevice(position);
+    await this._sendTuyaCommand(DP_POSITION, DP_TYPE_VALUE, this._encodeValue(devicePosition));
   }
 
   async _onSetState(value) {
     if (value === STATE_UP) {
-      await this._sendTuyaCommand(DP_CONTROL, DP_TYPE_ENUM, Buffer.from([COMMAND_OPEN]));
+      const command = this._isDirectionReversed() ? COMMAND_CLOSE : COMMAND_OPEN;
+      await this._sendTuyaCommand(DP_CONTROL, DP_TYPE_ENUM, Buffer.from([command]));
     } else if (value === STATE_DOWN) {
-      await this._sendTuyaCommand(DP_CONTROL, DP_TYPE_ENUM, Buffer.from([COMMAND_CLOSE]));
+      const command = this._isDirectionReversed() ? COMMAND_OPEN : COMMAND_CLOSE;
+      await this._sendTuyaCommand(DP_CONTROL, DP_TYPE_ENUM, Buffer.from([command]));
     } else if (value === STATE_IDLE) {
       await this._sendTuyaCommand(DP_CONTROL, DP_TYPE_ENUM, Buffer.from([COMMAND_STOP]));
     }
@@ -172,6 +189,48 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
     const buffer = Buffer.alloc(4);
     buffer.writeUInt32BE(Math.max(0, Math.min(100, value)), 0);
     return buffer;
+  }
+
+  _isDirectionReversed() {
+    return this.getSetting('reverse_direction') === true;
+  }
+
+  _normalizePositionFromDevice(position) {
+    const normalized = Math.max(0, Math.min(100, position));
+    if (this._isDirectionReversed()) {
+      return 100 - normalized;
+    }
+    return normalized;
+  }
+
+  _normalizePositionForDevice(position) {
+    const normalized = Math.max(0, Math.min(100, position));
+    if (this._isDirectionReversed()) {
+      return 100 - normalized;
+    }
+    return normalized;
+  }
+
+  async onSettings({ newSettings, changedKeys }) {
+    if (changedKeys.includes('reverse_direction')) {
+      await this._sendTuyaCommand(
+        DP_DIRECTION,
+        DP_TYPE_ENUM,
+        Buffer.from([newSettings.reverse_direction ? DIRECTION_REVERSE : DIRECTION_FORWARD]),
+      );
+
+      if (this._lastPosition !== null) {
+        const updatedPosition = 100 - this._lastPosition;
+        this._lastPosition = updatedPosition;
+        await this.setCapabilityValue('windowcoverings_set', updatedPosition / 100);
+        await this.setCapabilityValue('windowcoverings_closed', updatedPosition === 0);
+        await this._setState(STATE_IDLE);
+      }
+    }
+
+    if (changedKeys.includes('calibration')) {
+      await this._sendTuyaCommand(DP_CALIBRATION, DP_TYPE_ENUM, Buffer.from([COMMAND_CALIBRATE]));
+    }
   }
 
 };
