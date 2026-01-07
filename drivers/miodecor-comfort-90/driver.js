@@ -1,14 +1,14 @@
 'use strict';
 
-const Homey = require('homey');
+const { ZigBeeDriver } = require('homey-zigbeedriver');
 
-module.exports = class MyDriver extends Homey.Driver {
+module.exports = class MioDecorComfortDriver extends ZigBeeDriver {
 
   /**
    * onInit is called when the driver is initialized.
    */
   async onInit() {
-    this.log('MyDriver has been initialized');
+    this.log('MioDecorComfortDriver has been initialized');
   }
 
   /**

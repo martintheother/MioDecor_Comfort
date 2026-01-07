@@ -35,8 +35,7 @@
       "capabilities": [
         "windowcoverings_closed",
         "windowcoverings_set",
-        "windowcoverings_state",
-        "windowcoverings_tilt_set"
+        "windowcoverings_state"
       ],
       "platforms": [
         "local"
@@ -44,6 +43,23 @@
       "connectivity": [
         "zigbee"
       ],
+      "zigbee": {
+        "manufacturerName": "_TZE200_4vobcgd3",
+        "productId": "TS0601",
+        "endpoints": {
+          "1": {
+            "clusters": [
+              0,
+              4,
+              5,
+              61184
+            ],
+            "bindings": [
+              61184
+            ]
+          }
+        }
+      },
       "images": {
         "small": "/drivers/miodecor-comfort-90/assets/images/small.png",
         "large": "/drivers/miodecor-comfort-90/assets/images/large.png",
