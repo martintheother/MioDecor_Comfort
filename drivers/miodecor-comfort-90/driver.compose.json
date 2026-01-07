@@ -1,0 +1,23 @@
+{
+  "name": {
+    "en": "MioDecor Comfort 90"
+  },
+  "class": "curtain",
+  "capabilities": [
+    "windowcoverings_closed",
+    "windowcoverings_set",
+    "windowcoverings_state",
+    "windowcoverings_tilt_set"
+  ],
+  "platforms": [
+    "local"
+  ],
+  "connectivity": [
+    "zigbee"
+  ],
+  "images": {
+    "small": "{{driverAssetsPath}}/images/small.png",
+    "large": "{{driverAssetsPath}}/images/large.png",
+    "xlarge": "{{driverAssetsPath}}/images/xlarge.png"
+  }
+}
