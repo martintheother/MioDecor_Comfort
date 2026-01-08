@@ -5,6 +5,7 @@
   "class": "curtain",
   "capabilities": [
     "windowcoverings_closed",
+    "windowcoverings_preset",
     "windowcoverings_set",
     "windowcoverings_state"
   ],
@@ -29,6 +30,47 @@
         "en": "Swap the open and close direction for horizontal movement."
       },
       "value": false
+    },
+    {
+      "id": "fix_percent",
+      "type": "checkbox",
+      "label": {
+        "en": "Fix inverted percentage"
+      },
+      "hint": {
+        "en": "Invert the reported position percentage when the device reports reversed values."
+      },
+      "value": false
+    },
+    {
+      "id": "advanced_params",
+      "type": "checkbox",
+      "label": {
+        "en": "Advanced parameters"
+      },
+      "hint": {
+        "en": "Enable advanced handling such as replacing 0%/100% set level commands with open/close commands."
+      },
+      "value": false
+    },
+    {
+      "id": "preset_position",
+      "type": "number",
+      "label": {
+        "en": "Preset position"
+      },
+      "hint": {
+        "en": "Position percentage used when activating the preset command."
+      },
+      "value": 50,
+      "attr": {
+        "min": 0,
+        "max": 100,
+        "step": 1
+      },
+      "units": {
+        "en": "%"
+      }
     }
   ],
   "platforms": [
@@ -38,7 +80,11 @@
     "zigbee"
   ],
   "zigbee": {
-    "manufacturerName": "_TZE200_4vobcgd3",
+    "manufacturerName": [
+      "_TZE200_4vobcgd3",
+      "_TZE200_nkoabg1y",
+      "_TZE200_rddyvrci"
+    ],
     "productId": "TS0601",
     "endpoints": {
       "1": {

@@ -34,6 +34,7 @@
       "class": "curtain",
       "capabilities": [
         "windowcoverings_closed",
+        "windowcoverings_preset",
         "windowcoverings_set",
         "windowcoverings_state"
       ],
@@ -44,7 +45,11 @@
         "zigbee"
       ],
       "zigbee": {
-        "manufacturerName": "_TZE200_4vobcgd3",
+        "manufacturerName": [
+          "_TZE200_4vobcgd3",
+          "_TZE200_nkoabg1y",
+          "_TZE200_rddyvrci"
+        ],
         "productId": "TS0601",
         "endpoints": {
           "1": {
