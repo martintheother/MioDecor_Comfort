@@ -8,10 +8,10 @@
     "local"
   ],
   "name": {
-    "en": "MioDecor Comfort 90 Curtain Motor"
+    "en": "Drivers by Chudo"
   },
   "description": {
-    "en": "App adds support for MioDecor Comfort 90 Curtain Motor"
+    "en": "Adds drivers for devices that were not supported before. Current list includes MioDecor Comfort 90 Curtain Motor."
   },
   "category": [
     "appliances"
@@ -26,6 +26,7 @@
     "name": "Martin Chudik",
     "email": "martin@chudik.tech"
   },
+  "brandColor": "#0B0B0B",
   "drivers": [
     {
       "name": {
@@ -34,9 +35,97 @@
       "class": "curtain",
       "capabilities": [
         "windowcoverings_closed",
-        "windowcoverings_preset",
         "windowcoverings_set",
-        "windowcoverings_state"
+        "windowcoverings_state",
+        "onoff"
+      ],
+      "settings": [
+        {
+          "id": "calibration",
+          "type": "checkbox",
+          "label": {
+            "en": "Start calibration"
+          },
+          "hint": {
+            "en": "Run a calibration cycle for the horizontal curtains."
+          },
+          "value": false
+        },
+        {
+          "id": "reverse_direction",
+          "type": "checkbox",
+          "label": {
+            "en": "Reverse direction"
+          },
+          "hint": {
+            "en": "Swap the open and close direction for horizontal movement."
+          },
+          "value": false
+        },
+        {
+          "id": "fix_percent",
+          "type": "checkbox",
+          "label": {
+            "en": "Fix inverted percentage"
+          },
+          "hint": {
+            "en": "Invert the reported position percentage when the device reports reversed values."
+          },
+          "value": false
+        },
+        {
+          "id": "advanced_params",
+          "type": "text",
+          "label": {
+            "en": "Advanced parameters"
+          },
+          "hint": {
+            "en": "Comma separated key=value pairs, e.g. replace_setlevel_0_with_close=true,replace_setlevel_100_with_open=true"
+          },
+          "value": ""
+        },
+        {
+          "id": "dp2_as_report",
+          "type": "checkbox",
+          "label": {
+            "en": "Use DP2 as final position"
+          },
+          "hint": {
+            "en": "Enable this if your motor never sends a final position report. The DP2 value will be treated as the real position."
+          },
+          "value": false
+        },
+        {
+          "id": "state_override",
+          "type": "dropdown",
+          "label": {
+            "en": "Curtain state override"
+          },
+          "hint": {
+            "en": "If Homey does not know the current state, set it here."
+          },
+          "value": "unknown",
+          "values": [
+            {
+              "id": "unknown",
+              "label": {
+                "en": "Unknown"
+              }
+            },
+            {
+              "id": "open",
+              "label": {
+                "en": "Open"
+              }
+            },
+            {
+              "id": "closed",
+              "label": {
+                "en": "Closed"
+              }
+            }
+          ]
+        }
       ],
       "platforms": [
         "local"
@@ -60,7 +149,8 @@
               61184
             ],
             "bindings": [
-              61184
+              61184,
+              0
             ]
           }
         }

@@ -1,1 +1,1 @@
-App adds support for MioDecor Comfort 90 Curtain Motor
+Adds drivers for devices that were not supported before. Current list includes MioDecor Comfort 90 Curtain Motor.

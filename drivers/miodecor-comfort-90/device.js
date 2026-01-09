@@ -1,6 +1,7 @@
 'use strict';
 
 const { ZigBeeDevice } = require('homey-zigbeedriver');
+const { BasicCluster } = require('zigbee-clusters');
 
 require('./tuyaCluster');
 
@@ -9,8 +10,8 @@ const DP_POSITION = 0x02;
 const DP_POSITION_REPORT = 0x03;
 const DP_CALIBRATION = 0x04;
 const DP_DIRECTION = 0x05;
-const DP_WORK_STATE = 0x06;
-const DP_EXTRA = 0x07;
+const DP_ARRIVED = 0x06;
+const DP_WORK_STATE = 0x07;
 const DP_TYPE_VALUE = 0x02;
 const DP_TYPE_ENUM = 0x04;
 
@@ -30,6 +31,9 @@ const STATE_UP = 'up';
 const STATE_DOWN = 'down';
 const STATE_IDLE = 'idle';
 
+const AUTO_CALIBRATION_STORE_KEY = 'auto_calibrated';
+const AUTO_CALIBRATION_MOVES = 2;
+
 const KEEP_ALIVE_INTERVAL = 30 * 60 * 1000;
 const MAGIC_PACKET = Buffer.from([0x00, 0x00, 0x00, 0x00]);
 
@@ -43,6 +47,12 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
 
     this._packetId = 0;
     this._lastPosition = null;
+    this._pendingTarget = null;
+    this._lastDirection = null;
+    this._autoCalibrating = false;
+    this._autoCalibrationMovesLeft = 0;
+    this._autoCalibrationDirection = null;
+    this._advancedParams = {};
     this._tuyaCluster = zclNode.endpoints[1]?.clusters?.tuya;
 
     if (!this._tuyaCluster) {
@@ -57,14 +67,126 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
     this.registerCapabilityListener('windowcoverings_state', this._onSetState.bind(this));
     this.registerCapabilityListener('windowcoverings_closed', this._onSetClosed.bind(this));
 
-    if (this.hasCapability('windowcoverings_preset')) {
-      this.registerCapabilityListener('windowcoverings_preset', this._onPresetPosition.bind(this));
+    if (this.hasCapability('onoff')) {
+      this.registerCapabilityListener('onoff', this._onToggle.bind(this));
     }
+
+    this._parseAdvancedParams();
+
+    await this._configureReporting();
+    await this._maybeStartAutoCalibration();
+    await this._applyStateOverride(this.getSetting('state_override'));
 
     await this._sendMagicPacket();
     this._keepAliveInterval = this.homey.setInterval(() => {
       this._sendMagicPacket().catch((error) => this.error('Failed to send keep-alive', error));
     }, KEEP_ALIVE_INTERVAL);
+  }
+
+  async _configureReporting() {
+    try {
+      await this.configureAttributeReporting([
+        {
+          cluster: BasicCluster,
+          attributeName: 'appVersion',
+          minInterval: 30,
+          maxInterval: 300,
+          minChange: 1,
+        },
+      ]);
+    } catch (error) {
+      this.error('Failed to configure reporting', error);
+    }
+  }
+
+  _parseAdvancedParams() {
+    const params = {};
+    const raw = this.getSetting('advanced_params');
+    if (typeof raw === 'string' && raw.trim().length > 0) {
+      const normalized = raw.toLowerCase().replace(/\s+/g, '');
+      for (const entry of normalized.split(',')) {
+        if (!entry) {
+          continue;
+        }
+        const [key, value] = entry.split('=');
+        if (!key || value === undefined) {
+          continue;
+        }
+        if (value === 'true') {
+          params[key] = true;
+        } else if (value === 'false') {
+          params[key] = false;
+        } else if (!Number.isNaN(Number(value))) {
+          params[key] = Number(value);
+        } else {
+          params[key] = value;
+        }
+      }
+    }
+
+    this._advancedParams = params;
+  }
+
+  _getAdvancedParams() {
+    return this._advancedParams || {};
+  }
+
+  _getAdvancedParam(name) {
+    return this._getAdvancedParams()[name];
+  }
+
+  async _maybeStartAutoCalibration() {
+    if (this.getStoreValue(AUTO_CALIBRATION_STORE_KEY)) {
+      return;
+    }
+
+    this._autoCalibrating = true;
+    this._autoCalibrationMovesLeft = AUTO_CALIBRATION_MOVES;
+    this._autoCalibrationDirection = STATE_UP;
+    await this._startAutoCalibrationMove();
+  }
+
+  async _startAutoCalibrationMove() {
+    if (!this._autoCalibrating) {
+      return;
+    }
+
+    await this._onSetState(this._autoCalibrationDirection);
+  }
+
+  async _handleCalibrationPosition(position) {
+    if (!this._autoCalibrating) {
+      return;
+    }
+
+    if (position !== 0 && position !== 100) {
+      return;
+    }
+
+    this._autoCalibrationMovesLeft -= 1;
+
+    if (this._autoCalibrationMovesLeft <= 0) {
+      this._autoCalibrating = false;
+      await this.setStoreValue(AUTO_CALIBRATION_STORE_KEY, true);
+      return;
+    }
+
+    this._autoCalibrationDirection = this._autoCalibrationDirection === STATE_UP
+      ? STATE_DOWN
+      : STATE_UP;
+
+    await this._startAutoCalibrationMove();
+  }
+
+  async _applyStateOverride(value) {
+    if (value === 'open') {
+      await this._setLogicalPosition(100);
+    } else if (value === 'closed') {
+      await this._setLogicalPosition(0);
+    } else if (value === 'unknown') {
+      this._lastPosition = null;
+      this._pendingTarget = null;
+    }
   }
 
   async _handleTuyaData(data) {
@@ -80,12 +202,13 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
       return;
     }
 
-    if (dp === DP_POSITION || dp === DP_POSITION_REPORT) {
-      const position = this._parsePosition(dpType, payload);
-      if (position === null) {
-        return;
-      }
-      await this._updatePosition(position);
+    if (dp === DP_POSITION) {
+      await this._handlePositionCommand(dpType, payload);
+      return;
+    }
+
+    if (dp === DP_POSITION_REPORT) {
+      await this._handlePositionReport(dpType, payload);
       return;
     }
 
@@ -99,20 +222,22 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
       return;
     }
 
-    if (dp === DP_EXTRA) {
-      await this._handleExtraDataPoint(dpType, payload);
+    if (dp === DP_ARRIVED) {
+      await this._handleArrivedDataPoint(dpType, payload);
     }
   }
 
   _handleControlCommand(payload) {
     const command = payload[0];
     if (command === COMMAND_OPEN) {
+      this._pendingTarget = 100;
       if (this._isDirectionReversed()) {
         this._setState(STATE_DOWN);
         return;
       }
       this._setState(STATE_UP);
     } else if (command === COMMAND_CLOSE) {
+      this._pendingTarget = 0;
       if (this._isDirectionReversed()) {
         this._setState(STATE_UP);
         return;
@@ -129,6 +254,34 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
     }
 
     this._deviceDirection = payload[0];
+  }
+
+  async _handlePositionCommand(dpType, payload) {
+    const position = this._parsePosition(dpType, payload);
+    if (position === null) {
+      return;
+    }
+
+    if (this._treatDp2AsReport()) {
+      await this._updatePosition(position);
+      return;
+    }
+
+    const normalized = this._normalizePositionFromDevice(position);
+    this._pendingTarget = normalized;
+
+    if (this._lastPosition !== null && normalized !== this._lastPosition) {
+      await this._setState(normalized > this._lastPosition ? STATE_UP : STATE_DOWN);
+    }
+  }
+
+  async _handlePositionReport(dpType, payload) {
+    const position = this._parsePosition(dpType, payload);
+    if (position === null) {
+      return;
+    }
+
+    await this._updatePosition(position);
   }
 
   async _handleWorkState(dpType, payload) {
@@ -155,7 +308,7 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
     }
   }
 
-  async _handleExtraDataPoint(dpType, payload) {
+  async _handleArrivedDataPoint(dpType, payload) {
     if (dpType === DP_TYPE_VALUE) {
       const position = this._parsePosition(dpType, payload);
       if (position === null) {
@@ -165,8 +318,11 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
       return;
     }
 
-    if (dpType === DP_TYPE_ENUM) {
-      this._handleControlCommand(payload);
+    if (dpType === DP_TYPE_ENUM && payload.length > 0 && payload[0] === 0x00) {
+      if (this._pendingTarget !== null) {
+        await this._setLogicalPosition(this._pendingTarget);
+        await this._handleCalibrationPosition(this._pendingTarget);
+      }
     }
   }
 
@@ -202,35 +358,78 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
 
   async _updatePosition(position) {
     const normalized = this._normalizePositionFromDevice(position);
+    await this._setLogicalPosition(normalized);
+    await this._handleCalibrationPosition(normalized);
+  }
+
+  async _setLogicalPosition(position) {
+    const normalized = Math.max(0, Math.min(100, position));
     const setValue = normalized / 100;
 
     this._lastPosition = normalized;
+    this._pendingTarget = null;
 
     await this.setCapabilityValue('windowcoverings_set', setValue);
     await this.setCapabilityValue('windowcoverings_closed', normalized === 0);
+    await this._setOnOffState(normalized);
     await this._setState(STATE_IDLE);
   }
 
   async _setState(state) {
+    if (state === STATE_UP || state === STATE_DOWN) {
+      this._lastDirection = state;
+    }
+
     if (this.hasCapability('windowcoverings_state')) {
       await this.setCapabilityValue('windowcoverings_state', state);
     }
   }
 
-  async _onSetPosition(value) {
-    const position = Math.round(value * 100);
+  _isMoving() {
+    const state = this.getCapabilityValue('windowcoverings_state');
+    return state === STATE_UP || state === STATE_DOWN;
+  }
 
-    await this._applyTargetPosition(position, {
-      replaceWithControl: this._shouldReplaceSetLevel(),
-    });
+  async _setOnOffState(position) {
+    if (!this.hasCapability('onoff')) {
+      return;
+    }
+
+    let onoff;
+    if (position === 0) {
+      onoff = false;
+    } else if (position === 100) {
+      onoff = true;
+    } else if (this._lastDirection === STATE_DOWN) {
+      onoff = false;
+    } else {
+      onoff = true;
+    }
+
+    await this.setCapabilityValue('onoff', onoff);
+  }
+
+  async _onSetPosition(value) {
+    if (this._autoCalibrating) {
+      return;
+    }
+
+    const position = Math.round(value * 100);
+    await this._applyTargetPosition(position);
   }
 
   async _onSetState(value) {
+    if (value === STATE_IDLE && this._autoCalibrating) {
+      return;
+    }
+
     if (value === STATE_UP) {
       const command = this._isDirectionReversed() ? COMMAND_CLOSE : COMMAND_OPEN;
+      this._pendingTarget = this._isDirectionReversed() ? 0 : 100;
       await this._sendTuyaCommand(DP_CONTROL, DP_TYPE_ENUM, Buffer.from([command]));
     } else if (value === STATE_DOWN) {
       const command = this._isDirectionReversed() ? COMMAND_OPEN : COMMAND_CLOSE;
+      this._pendingTarget = this._isDirectionReversed() ? 100 : 0;
       await this._sendTuyaCommand(DP_CONTROL, DP_TYPE_ENUM, Buffer.from([command]));
     } else if (value === STATE_IDLE) {
       await this._sendTuyaCommand(DP_CONTROL, DP_TYPE_ENUM, Buffer.from([COMMAND_STOP]));
@@ -238,25 +437,52 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
   }
 
   async _onSetClosed(value) {
+    if (this._autoCalibrating) {
+      return;
+    }
+
+    if (this._isMoving()) {
+      await this._onSetState(STATE_IDLE);
+      return;
+    }
+
     await this._onSetState(value ? STATE_DOWN : STATE_UP);
   }
 
-  async _onPresetPosition(value) {
-    if (!value) {
+  async _onToggle() {
+    if (this._autoCalibrating) {
       return;
     }
 
-    const presetPosition = this._getPresetPosition();
-    if (presetPosition === null) {
+    if (this._isMoving()) {
+      await this._onSetState(STATE_IDLE);
       return;
     }
 
-    await this._applyTargetPosition(presetPosition, {
-      replaceWithControl: this._shouldReplaceSetLevel(),
-    });
+    await this._toggleDirection();
   }
 
-  async _applyTargetPosition(position, { replaceWithControl }) {
+  async _toggleDirection() {
+    if (this._lastPosition === null) {
+      await this._onSetState(STATE_UP);
+      return;
+    }
+
+    if (this._lastPosition <= 0) {
+      await this._onSetState(STATE_UP);
+      return;
+    }
+
+    if (this._lastPosition >= 100) {
+      await this._onSetState(STATE_DOWN);
+      return;
+    }
+
+    const nextDirection = this._lastDirection === STATE_UP ? STATE_DOWN : STATE_UP;
+    await this._onSetState(nextDirection);
+  }
+
+  async _applyTargetPosition(position) {
     const target = Math.max(0, Math.min(100, position));
 
     if (this._lastPosition !== null) {
@@ -266,11 +492,12 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
       }
     }
 
-    if (replaceWithControl && (target === 0 || target === 100)) {
+    if (this._shouldReplaceSetLevel(target) && (target === 0 || target === 100)) {
       await this._onSetState(target === 0 ? STATE_DOWN : STATE_UP);
       return;
     }
 
+    this._pendingTarget = target;
     const devicePosition = this._normalizePositionForDevice(target);
     await this._sendTuyaCommand(DP_POSITION, DP_TYPE_VALUE, this._encodeValue(devicePosition));
   }
@@ -317,17 +544,19 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
     return reverse !== invert;
   }
 
-  _shouldReplaceSetLevel() {
-    return this.getSetting('advanced_params') === true;
+  _shouldReplaceSetLevel(target) {
+    const params = this._getAdvancedParams();
+    if (target === 0) {
+      return params.replace_setlevel_0_with_close === true;
+    }
+    if (target === 100) {
+      return params.replace_setlevel_100_with_open === true;
+    }
+    return false;
   }
 
-  _getPresetPosition() {
-    const preset = Number(this.getSetting('preset_position'));
-    if (Number.isNaN(preset)) {
-      return null;
-    }
-
-    return Math.max(0, Math.min(100, preset));
+  _treatDp2AsReport() {
+    return this.getSetting('dp2_as_report') === true || this._getAdvancedParam('dp2_as_report') === true;
   }
 
   _normalizePositionFromDevice(position) {
@@ -360,16 +589,26 @@ module.exports = class MioDecorComfortDevice extends ZigBeeDevice {
       );
     }
 
-    if (changedKeys.includes('calibration')) {
+    if (changedKeys.includes('calibration') && newSettings.calibration === true) {
       await this._sendTuyaCommand(DP_CALIBRATION, DP_TYPE_ENUM, Buffer.from([COMMAND_CALIBRATE]));
+      try {
+        await this.setSettings({ calibration: false });
+      } catch (error) {
+        this.error('Failed to reset calibration toggle', error);
+      }
+    }
+
+    if (changedKeys.includes('advanced_params')) {
+      this._parseAdvancedParams();
+    }
+
+    if (changedKeys.includes('state_override')) {
+      await this._applyStateOverride(newSettings.state_override);
     }
 
     if (previousInvert !== nextInvert && this._lastPosition !== null) {
       const updatedPosition = 100 - this._lastPosition;
-      this._lastPosition = updatedPosition;
-      await this.setCapabilityValue('windowcoverings_set', updatedPosition / 100);
-      await this.setCapabilityValue('windowcoverings_closed', updatedPosition === 0);
-      await this._setState(STATE_IDLE);
+      await this._setLogicalPosition(updatedPosition);
     }
   }
 
